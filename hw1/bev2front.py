@@ -21,9 +21,65 @@ class Projection(object):
             Project the top view pixels to the front view pixels.
             :return: New pixels on perspective(front) view image
         """
+        
+        # calculate focal length
+        fov_rad = np.deg2rad(fov)
+        f = self.width / (2 * np.tan(fov_rad / 2))
+        # principal point
+        cx, cy = self.width / 2, self.height / 2
 
-        ### TODO ###
-        return new_pixels
+        # camera positions
+        cam1_pos = np.array([0.0, 1.0, 0.0])
+        cam2_pos = np.array([0.0, 2.5, 0.0])
+
+        # BEV camera's rotation matrix
+        angle = -(np.pi / 2)
+        R_bev = np.array([
+            [1, 0, 0],
+            [0, np.cos(angle), -np.sin(angle)],
+            [0, np.sin(angle),  np.cos(angle)]
+        ])
+
+        new_pixels = []
+
+        for p in points:
+            u, v = p[0], p[1]
+
+            # unproject BEV pixel to camera-space ray
+            ray_cam = np.array([(u - cx) / f, (v - cy) / f, -1.0])
+            # rotate ray into world space
+            ray_world = R_bev @ ray_cam
+
+            # skip if parallel
+            if abs(ray_world[1]) < 1e-6:
+                continue
+
+            # where the ray from cam2_pos hits the ground
+            t = -cam2_pos[1] / ray_world[1]
+            # skip if behind camera
+            if t < 0:
+                continue
+
+            world_pt = cam2_pos + t * ray_world
+
+            # transform world point into front camera space
+            p_cam1 = world_pt - cam1_pos
+
+            # skip if behind camera
+            if p_cam1[2] <= 0:
+                continue
+
+            # project onto front image
+            u_front = int(round((f * p_cam1[0] / p_cam1[2]) + cx))
+            v_front = int(round((f * (-p_cam1[1]) / p_cam1[2]) + cy))
+
+            # If the projected points are out of bound, set to bound
+            u_front = max(0, min(u_front, self.width - 1))
+            v_front = max(0, min(v_front, self.height - 1))
+            
+            new_pixels.append([u_front, v_front])
+        
+        return np.array(new_pixels, dtype=np.int32).reshape((-1, 1, 2))
 
     def show_image(self, new_pixels, img_name='projection.png', color=(0, 0, 255), alpha=0.4):
         """
@@ -71,8 +127,8 @@ if __name__ == "__main__":
 
     pitch_ang = -90
 
-    front_rgb = "bev_data/front1.png"
-    top_rgb = "bev_data/bev1.png"
+    front_rgb = "bev_data/front2.png"
+    top_rgb = "bev_data/bev2.png"
 
     # click the pixels on window
     img = cv2.imread(top_rgb, 1)
