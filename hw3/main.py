@@ -3,8 +3,7 @@ import sys
 from typing import List, Tuple
 
 from map_processor import load_and_filter_map, select_start, get_goal_pixels
-from navigator import init_sim, execute_waypoint_path
-
+import rrt_utils as rrt
 
 POINT_CLOUD_DATA = "semantic_3d_pointcloud/point.npy"
 COLOR_DATA = "semantic_3d_pointcloud/color0255.npy"
@@ -18,11 +17,15 @@ SEMANTIC_DICTS = {
         "rack": [[0, 255, 133]],
         "cooktop": [[7, 255, 224]],
         "sofa": [[10, 0, 255]],
+        "cushion": [[255, 9, 92]],
+        "stair": [[173, 255, 0]]
     },
     "indices": {
         "rack": 8,
         "cooktop": 280,
         "sofa": 196,
+        "cushion": 431,
+        "stair": 192
     },
 }
 
@@ -40,6 +43,8 @@ def pick_goal(map_img) -> Tuple[str, Tuple[int, int]]:
 
 
 def run_in_sim(start_world: Tuple[float, float], world_path: List[Tuple[float, float]], goal_prompt: str):
+    from navigator import init_sim, execute_waypoint_path
+
     start_x, start_z = start_world
     print(f"Spawning Agent at world position: ({start_x:.3f}, {start_z:.3f})")
 
@@ -47,45 +52,63 @@ def run_in_sim(start_world: Tuple[float, float], world_path: List[Tuple[float, f
     execute_waypoint_path(world_path, sim, agent, SEMANTIC_DICTS["indices"][goal_prompt])
 
 
+def raster_to_world(raster, x_min, z_min, img_height, resolution) -> Tuple[float, float]:
+    col, row = raster
+    # Map each raster cell to its center in Habitat world coordinates.
+    wx = ((col + 0.5) * resolution) + x_min
+    wz = ((img_height - row - 0.5) * resolution) + z_min
+    return (wx, wz)
+
+
 def main():
     """Entry point."""
 
     print("=== Step 1: Processing the 3D Map ===")
-    # =============== TODO 1-2 ===============
-    # map_img, occupancy_map, ... = load_and_filter_map(POINT_CLOUD_DATA, COLOR_DATA)
+    (raster_map, occupancy_map, x_min, z_min, resolution, img_height) = load_and_filter_map(POINT_CLOUD_DATA, COLOR_DATA)
 
 
     print("=== Step 2: Selecting Agent Start and Goal Positions ===")
-    start = select_start(map_img)
-    goal_prompt, goal = pick_goal(map_img)
-    print(f"Goal pixel selected at coordinates: {goal}")
-
+    start = select_start(raster_map)
+    goal_prompt, goal = pick_goal(raster_map)
+    print(f"Start raster coordinates: {start}")
+    print(f"Goal raster coordinates: {goal}")
 
     print("=== Step 3: Executing Path Planning (RRT) ===")
-    # =============== TODO 2 ===============
-    # implement RRT path planner in plan_path()
-
-    # path = plan_path(start, goal, occupancy_map)
-    # if not path:
-    #     print("Planner could not find a path.")
-    #     sys.exit(1)
+    path = rrt.plan_path(start, goal, occupancy_map)
+    if not path:
+        print("Planner could not find a path.")
+        sys.exit(1)
+    print("Path found.")
 
 
     print("=== Step 4: Visualizing the Planned Path ===")
-    # =============== TODO 3 ===============
-    # Visualize the planned path over the map
+    explored_edges = rrt.get_last_rrt_edges()
+    explored_nodes = rrt.get_last_rrt_nodes()
+    rrt.visualize_path(
+        raster_map,
+        path,
+        start,
+        goal,
+        explored_edges=explored_edges,
+        explored_nodes=explored_nodes,
+    )
 
-    # visualize_path(...)
-
+    return
 
     print("=== Step 5: Translating Path to Habitat Simulator ===")
-    # =============== TODO 4 ===============
-    # Convert pixel path to world coordinates
-    # world_path is a list of tuples(float, float) representing waypoints in world coordinates
+    world_path = [
+        raster_to_world(pixel, x_min, z_min, img_height, resolution)
+        for pixel in path
+    ]
 
-    # world_path = ... 
+    print("World-space waypoints:")
+    for idx, waypoint in enumerate(world_path):
+        print(f"  {idx}: ({waypoint[0]:.3f}, {waypoint[1]:.3f})")
 
-    run_in_sim(world_path[0], world_path, goal_prompt)
+    try:
+        run_in_sim(world_path[0], world_path, goal_prompt)
+    except ModuleNotFoundError as exc:
+        print(f"Skipping Habitat navigation because a dependency is missing: {exc}")
 
 
 if __name__ == "__main__":

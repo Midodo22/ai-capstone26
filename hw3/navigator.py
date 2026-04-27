@@ -14,7 +14,7 @@ SENSOR_HEIGHT_PX = 512
 SENSOR_PITCH = 0.0
 MOVE_AMOUNT = 0.1
 TURN_AMOUNT = 1.0
-INITIAL_HEADING = math.pi
+INITIAL_HEADING = 0.0
 
 # Default action names
 MOVE_FORWARD = "move_forward"
@@ -39,6 +39,44 @@ def _transform_semantic(semantic_obs: np.ndarray) -> np.ndarray:
     semantic_img.putdata((semantic_obs.flatten() % 40).astype(np.uint8))
     semantic_img = semantic_img.convert("RGB")
     return cv2.cvtColor(np.asarray(semantic_img), cv2.COLOR_RGB2BGR)
+
+
+def _yaw_to_quaternion(yaw: float) -> List[float]:
+    """Return a Habitat-compatible yaw quaternion in (x, y, z, w) order."""
+    half_yaw = yaw / 2.0
+    return [0.0, math.sin(half_yaw), 0.0, math.cos(half_yaw)]
+
+
+def _direction_to_yaw(dx: float, dz: float) -> float:
+    """
+    Convert a world-space direction into Habitat yaw.
+    Habitat agents face along the negative Z axis when yaw == 0.
+    """
+    return math.atan2(-dx, -dz)
+
+
+def _compress_waypoints(path_world: List[Tuple[float, float]]) -> List[Tuple[float, float]]:
+    """
+    Merge densely-sampled planner pixels into coarser waypoints that are at least
+    one forward action apart, while preserving the final goal.
+    """
+    if len(path_world) <= 2:
+        return path_world
+
+    compressed = [path_world[0]]
+    anchor = path_world[0]
+
+    for waypoint in path_world[1:-1]:
+        dx = waypoint[0] - anchor[0]
+        dz = waypoint[1] - anchor[1]
+        if math.hypot(dx, dz) >= MOVE_AMOUNT:
+            compressed.append(waypoint)
+            anchor = waypoint
+
+    if compressed[-1] != path_world[-1]:
+        compressed.append(path_world[-1])
+
+    return compressed
 
 # =============================
 # Simulator Core
@@ -100,6 +138,7 @@ def init_sim(scene_path: str = SCENE_PATH, start_x: float = 0.9, start_z: float 
     agent = sim.initialize_agent(sim_settings["default_agent"])
     agent_state = habitat_sim.AgentState()
     agent_state.position = np.array([start_x, 0.0, start_z])  # World translation
+    agent_state.rotation = _yaw_to_quaternion(INITIAL_HEADING)
     agent.set_state(agent_state)
 
     print("Habitat simulator initialized successfully.")
@@ -140,24 +179,30 @@ def execute_waypoint_path(path_world: List[Tuple[float, float]], sim, agent, goa
     Convert a sequence of world 3D waypoints into simulator actuation actions
     (turning and moving forward).
     """
+    path_world = _compress_waypoints(path_world)
     heading = INITIAL_HEADING
 
     for i in range(1, len(path_world)):
         x0, z0 = path_world[i - 1]
         x1, z1 = path_world[i]
         dx, dz = x1 - x0, z1 - z0
+        segment_length = math.hypot(dx, dz)
 
-        target_angle = math.atan2(dx, dz)
+        if segment_length < 1e-6:
+            continue
+
+        target_angle = _direction_to_yaw(dx, dz)
         dtheta = (target_angle - heading + math.pi) % (2 * math.pi) - math.pi
 
         # 1. Turn to align the agent towards the target angle
-        turn_steps = int(abs(math.degrees(dtheta)))
-        action = TURN_LEFT if dtheta > 0 else TURN_RIGHT
-        for _ in range(turn_steps):
-            navigate_and_see(sim, agent, action, goal_idx)
+        turn_steps = int(round(abs(math.degrees(dtheta)) / TURN_AMOUNT))
+        if turn_steps > 0:
+            action = TURN_LEFT if dtheta > 0 else TURN_RIGHT
+            for _ in range(turn_steps):
+                navigate_and_see(sim, agent, action, goal_idx)
 
         # 2. Step forward physically toward the waypoint
-        steps_forward = int(math.sqrt(dx**2 + dz**2) / MOVE_AMOUNT)
+        steps_forward = max(1, int(round(segment_length / MOVE_AMOUNT)))
         for _ in range(steps_forward):
             navigate_and_see(sim, agent, MOVE_FORWARD, goal_idx)
 

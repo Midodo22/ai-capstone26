@@ -1,11 +1,10 @@
-# ai-capstone-hw3
-NYCU AI CAPSTONE 2026 Spring
+# AI Capstone HW3 README
+112550151 周佳瑩
 
-Spec: https://docs.google.com/document/d/1-BvmwVXlk8g06hZYU2sgTaR3iAti8XRA73k6sIdHrrA/edit?usp=sharing
-## Preparation
-`git pull` to get new `hw3` directory.
+I used the same dataset as in `hw0`.
 
-The following template code is provided. You may choose whether to use it.
-`main.py`
-`map_processor.py`
-`navigator.py`
+## Commands
+```bash
+cd hw3
+python main.py
+```
