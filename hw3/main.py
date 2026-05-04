@@ -93,8 +93,6 @@ def main():
         explored_nodes=explored_nodes,
     )
 
-    return
-
     print("=== Step 5: Translating Path to Habitat Simulator ===")
     world_path = [
         raster_to_world(pixel, x_min, z_min, img_height, resolution)

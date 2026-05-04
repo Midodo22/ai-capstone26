@@ -279,9 +279,7 @@ def plan_path(start, goal, occupancy_map):
     step_size = max(6, min(15, min(occupancy_map.shape) // 40))
     for _ in range(3):
         path = RRT(start_free, goal_free, occupancy_map, stepSize=step_size, max_iter=8000)
-        if path and path[-1] != goal_free and not collision(
-            path[-1][0], path[-1][1], goal_free[0], goal_free[1], occupancy_map
-        ):
+        if path and path[-1] != goal_free and not collision(path[-1][0], path[-1][1], goal_free[0], goal_free[1], occupancy_map):
             path = densify_path(path + [goal_free])
         if path_is_collision_free(path, occupancy_map) and path[-1] == goal_free:
             return path
