@@ -141,6 +141,74 @@ def your_ik(new_pose : list or tuple or np.ndarray,
 
     ###################
     
+    dh_params = get_ur5_DH_params()
+    target_pose = np.asarray(new_pose, dtype=np.float64)
+    
+    # Extract target position and orientation
+    target_pos = target_pose[:3]
+    target_quat = target_pose[3:]  # [qx, qy, qz, qw]
+    target_rot = R.from_quat(target_quat).as_matrix()
+    
+    # Hyperparameters for optimization
+    step_rate = 0.5  # Learning rate for joint updates
+    damping_lambda = 0.01  # Damping factor for pseudo-inverse
+    
+    # Iterative optimization loop
+    for iteration in range(max_iters):
+        # 1. Evaluate current pose and Jacobian
+        current_pose, jacobian = your_fk(dh_params, tmp_q, base_pos)
+        current_pos = np.asarray(current_pose[:3], dtype=np.float64)
+        current_quat = np.asarray(current_pose[3:], dtype=np.float64)
+        current_rot = R.from_quat(current_quat).as_matrix()
+        
+        # 2. Compute 6D error
+        # Position error (3D)
+        pos_error = target_pos - current_pos
+        
+        # Orientation error (3D axis-angle from relative rotation)
+        # R_error = R_target @ R_current.T
+        R_error = target_rot @ current_rot.T
+        
+        # Convert rotation matrix to axis-angle
+        try:
+            rot_error_obj = R.from_matrix(R_error)
+            ori_error = rot_error_obj.as_rotvec()  # axis-angle representation
+        except Exception:
+            # If rotation matrix is invalid, use small zero error
+            ori_error = np.array([0.0, 0.0, 0.0])
+        
+        # Full 6D error vector
+        error_6d = np.concatenate([pos_error, ori_error])
+        error_norm = np.linalg.norm(error_6d)
+        
+        # 3. Check stopping condition
+        if error_norm < stop_thresh:
+            break
+        
+        # 4. Compute delta_q using pseudo-inverse with damping
+        # J_pinv = J^T @ (J @ J^T + lambda*I)^-1
+        J = jacobian
+        m, n = J.shape  # m=6, n=6
+        
+        # Compute pseudo-inverse with damping (Levenberg-Marquardt style)
+        JJt = J @ J.T
+        JJt_damped = JJt + damping_lambda * np.eye(m)
+        try:
+            J_pinv = J.T @ np.linalg.inv(JJt_damped)
+        except np.linalg.LinAlgError:
+            # Fall back to simple pseudo-inverse if singular
+            J_pinv = pinv(J)
+        
+        # Compute joint update
+        delta_q = J_pinv @ error_6d
+        
+        # 5. Apply step size and update joints
+        tmp_q = tmp_q + step_rate * delta_q
+        
+        # 6. Clip joints to stay within limits
+        for i in range(6):
+            tmp_q[i] = np.clip(tmp_q[i], joint_limits[i, 0], joint_limits[i, 1])
+    
 
     return list(tmp_q) # 6 DoF
 

@@ -259,14 +259,64 @@ def your_fk(DH_params : dict, q, base_pos) -> np.ndarray:
     
     #### your code ####
     
-
     # A = ? # may be more than one line
     # jacobian = ? # may be more than one line
 
-    raise NotImplementedError
+    # raise NotImplementedError
     # hint : 
     # https://automaticaddison.com/the-ultimate-guide-to-jacobian-matrices-for-robotics/
     
+    q = np.asarray(q, dtype=np.float64)
+    
+    # Store transformation matrices and join origins
+    T_matrices = [A]
+    joint_origins = [A[:3, 3]]
+    joint_axes = []
+    
+    # forward pass: compute transformations with classic DH convention
+    for i in range(6):
+        dh = DH_params[i]
+        a = dh['a']
+        d = dh['d']
+        alpha = dh['alpha']
+        theta = q[i]
+        
+        # Classic DH transformation matrix
+        # T_i = Rz(theta) * Tz(d) * Tx(a) * Rx(alpha)
+        T_dh = np.array([
+            [np.cos(theta), -np.sin(theta) * np.cos(alpha), np.sin(theta) * np.sin(alpha), a * np.cos(theta)],
+            [np.sin(theta), np.cos(theta) * np.cos(alpha), -np.cos(theta) * np.sin(alpha), a * np.sin(theta)],
+            [0, np.sin(alpha), np.cos(alpha), d],
+            [0, 0, 0, 1]
+        ], dtype=np.float64)
+        
+        # Cumulative transformation
+        A = T_matrices[-1] @ T_dh
+        T_matrices.append(A)
+        
+        # Store joint origin position and axis
+        joint_origins.append(A[:3, 3])
+        joint_axes.append(A[:3, 2])
+    
+    # End-effector position and orientation
+    p_end = A[:3, 3]
+    
+    # Build Jacobian matrix
+    # For each joint i (0-5):
+    # - Velocity part: Jv_i = z_{i-1} x (p_end - p_{i-1})
+    # - Angular part: Jw_i = z_{i-1}
+    for i in range(6):
+        z_axis = joint_axes[i]  # z_{i}
+        p_i = joint_origins[i]  # p_{i}
+        p_diff = p_end - p_i    # p_end - p_i
+        
+        # Velocity Jacobian column
+        jv = cross(z_axis, p_diff)
+        jacobian[:3, i] = jv
+        
+        # Angular Jacobian column
+        jacobian[3:6, i] = z_axis
+
     ###############################################
 
     # adjustment don't touch
