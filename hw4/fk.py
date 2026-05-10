@@ -268,13 +268,16 @@ def your_fk(DH_params : dict, q, base_pos) -> np.ndarray:
     
     q = np.asarray(q, dtype=np.float64)
     
-    # Store transformation matrices and join origins
-    T_matrices = [A]
-    joint_origins = [A[:3, 3]]
+    # Store each joint origin and axis before applying that joint's DH transform.
+    # For a revolute DH chain, Jacobian column i uses frame i-1.
+    joint_origins = []
     joint_axes = []
     
     # forward pass: compute transformations with classic DH convention
     for i in range(6):
+        joint_origins.append(A[:3, 3].copy())
+        joint_axes.append(A[:3, 2].copy())
+
         dh = DH_params[i]
         a = dh['a']
         d = dh['d']
@@ -291,12 +294,7 @@ def your_fk(DH_params : dict, q, base_pos) -> np.ndarray:
         ], dtype=np.float64)
         
         # Cumulative transformation
-        A = T_matrices[-1] @ T_dh
-        T_matrices.append(A)
-        
-        # Store joint origin position and axis
-        joint_origins.append(A[:3, 3])
-        joint_axes.append(A[:3, 2])
+        A = A @ T_dh
     
     # End-effector position and orientation
     p_end = A[:3, 3]
