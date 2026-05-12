@@ -58,8 +58,92 @@ def _get_initial_q(q_init=None):
     )
 
 
+def _ik_levenberg_marquardt(dh_params, target_pos, target_rot, base_pos, q_init,
+                           joint_limits, max_iters=1000, stop_thresh=0.001):
+    """Solve IK using Levenberg-Marquardt method.
+    
+    Parameters
+    ----------
+    dh_params : dict
+        DH parameters for UR5.
+    target_pos : np.ndarray
+        Target position (3D).
+    target_rot : np.ndarray
+        Target rotation matrix (3x3).
+    base_pos : np.ndarray
+        Base position (3D).
+    q_init : np.ndarray
+        Initial joint angles (6D).
+    joint_limits : np.ndarray
+        Joint limits (6x2).
+    max_iters : int
+        Maximum iterations.
+    stop_thresh : float
+        Stopping threshold.
+    
+    Returns
+    -------
+    np.ndarray
+        Solved joint angles (6D).
+    """
+    tmp_q = q_init.copy()
+    step_rate = 0.5
+    lambda_param = 0.001  # Initial damping
+    lambda_max = 10.0
+    lambda_min = 0.00001
+    nu = 10.0  # Parameter adjustment factor
+    
+    for iteration in range(max_iters):
+        current_pose, jacobian = your_fk(dh_params, tmp_q, base_pos)
+        current_pos = np.asarray(current_pose[:3], dtype=np.float64)
+        current_quat = np.asarray(current_pose[3:], dtype=np.float64)
+        current_rot = R.from_quat(current_quat).as_matrix()
+        
+        error_6d, error_norm = _compute_6d_error(target_pos, target_rot, current_pos, current_rot)
+        
+        if error_norm < stop_thresh:
+            break
+        
+        J = jacobian
+        m, n = J.shape
+        
+        # Levenberg-Marquardt update
+        JJt = J @ J.T
+        JJt_lm = JJt + lambda_param * np.eye(m)
+        
+        try:
+            J_pinv = J.T @ np.linalg.inv(JJt_lm)
+        except np.linalg.LinAlgError:
+            J_pinv = pinv(J)
+        
+        delta_q = J_pinv @ error_6d
+        q_new = tmp_q + step_rate * delta_q
+        
+        # Clip to joint limits
+        for i in range(6):
+            q_new[i] = np.clip(q_new[i], joint_limits[i, 0], joint_limits[i, 1])
+        
+        # Evaluate new error
+        new_pose, _ = your_fk(dh_params, q_new, base_pos)
+        new_pos = np.asarray(new_pose[:3], dtype=np.float64)
+        new_quat = np.asarray(new_pose[3:], dtype=np.float64)
+        new_rot = R.from_quat(new_quat).as_matrix()
+        
+        _, new_error_norm = _compute_6d_error(target_pos, target_rot, new_pos, new_rot)
+        
+        # Adjust damping parameter
+        if new_error_norm < error_norm:
+            tmp_q = q_new
+            lambda_param = max(lambda_param / nu, lambda_min)
+        else:
+            lambda_param = min(lambda_param * nu, lambda_max)
+    
+    return list(tmp_q)
+
+
 def your_ik(new_pose : list or tuple or np.ndarray, 
-                base_pos, max_iters : int=1000, stop_thresh : float=.001, q_init=None):
+                base_pos, max_iters : int=1000, stop_thresh : float=.001, q_init=None,
+                method : str = "pseudo_inverse"):
     """Solve inverse kinematics using iterative Jacobian pseudo-inverse updates.
 
     Parameters
@@ -149,6 +233,11 @@ def your_ik(new_pose : list or tuple or np.ndarray,
     target_quat = target_pose[3:]  # [qx, qy, qz, qw]
     target_rot = R.from_quat(target_quat).as_matrix()
     
+    if method.lower() == "levenberg_marquardt":
+        return _ik_levenberg_marquardt(dh_params, target_pos, target_rot, base_pos, tmp_q,
+                                       joint_limits, max_iters, stop_thresh)
+    
+    
     # Hyperparameters for optimization
     step_rate = 0.5  # Learning rate for joint updates
     damping_lambda = 0.01  # Damping factor for pseudo-inverse
@@ -186,7 +275,6 @@ def your_ik(new_pose : list or tuple or np.ndarray,
             break
         
         # 4. Compute delta_q using pseudo-inverse with damping
-        # J_pinv = J^T @ (J @ J^T + lambda*I)^-1
         J = jacobian
         m, n = J.shape  # m=6, n=6
         
@@ -404,7 +492,14 @@ def main(args):
     dict
         Score summary from ``score_ik``.
     """
-    return score_ik(your_ik, headless=bool(args.headless))
+    # Create a wrapper function that uses the specified method
+    def your_ik_with_method(new_pose, base_pos, max_iters=1000, stop_thresh=0.001, q_init=None):
+        return your_ik(new_pose, base_pos, max_iters=max_iters, stop_thresh=stop_thresh, 
+                      q_init=q_init, method=args.method)
+    
+    return score_ik(your_ik_with_method, headless=bool(args.headless))
+    
+    # return score_ik(your_ik, headless=bool(args.headless))
     
 
 
@@ -412,5 +507,9 @@ if __name__=="__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument('--headless', action='store_true', default=False,
                         help='run Isaac Sim without rendering window')
+    parser.add_argument('--method', type=str, default='pseudo_inverse',
+                        choices=['pseudo_inverse', 'levenberg_marquardt'],
+                        help='IK method to use (default: pseudo_inverse)')
+    
     args = parser.parse_args()
     main(args)
